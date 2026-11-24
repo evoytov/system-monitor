@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 
 import psutil
-from PyQt6.QtCore import QPoint, QRect, QRectF, QThread, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMenu,
     QSizePolicy,
+    QStyle,
     QSystemTrayIcon,
     QToolButton,
     QVBoxLayout,
@@ -59,7 +60,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "HermesSystemMonitor"
 
 APP_NAME = "System Monitor"
-APP_VERSION = "1.01"
+APP_VERSION = "1.02"
 APP_IDEA = "Evgeniy_RED"
 APP_IMPL = "DeepSeek V4.1-Flash 1017"
 
@@ -513,14 +514,17 @@ class Metric(QWidget):
                 row2.setSpacing(6)
                 row2.addWidget(self.bar, 1)
                 btn = QToolButton(self)
-                btn.setText("⟳")
+                btn.setIcon(self.style().standardIcon(
+                    QStyle.StandardPixmap.SP_BrowserReload))
+                btn.setIconSize(QSize(12, 12))
                 btn.setToolTip(action_tip)
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.setFixedSize(14, 14)
+                btn.setFixedSize(16, 16)
                 btn.setStyleSheet(
                     "QToolButton { border: none; background: transparent;"
-                    " color: #8e8e98; font-size: 11px; padding: 0; }"
-                    " QToolButton:hover { color: #f2f2f7; }"
+                    " padding: 0; }"
+                    " QToolButton:hover { background: rgba(255,255,255,26);"
+                    " border-radius: 8px; }"
                 )
                 btn.clicked.connect(action)
                 row2.addWidget(btn)
