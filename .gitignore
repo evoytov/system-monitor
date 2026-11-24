@@ -1,0 +1,19 @@
+# артефакты сборки — они собираются заново
+dist/
+build/
+*.spec
+SystemMonitor.exe
+SystemMonitor-Portable/
+
+# окружение и кэш Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# локальные данные (у каждого свои)
+settings.json
+events.log
+
+# мои тестовые скрипты, превью и старые копии
+_dev/
