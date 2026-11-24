@@ -60,7 +60,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "HermesSystemMonitor"
 
 APP_NAME = "System Monitor"
-APP_VERSION = "1.04"
+APP_VERSION = "1.05"
 APP_IDEA = "Evgeniy_RED"
 APP_IMPL = "DeepSeek V4.1-Flash 1017"
 
@@ -319,15 +319,28 @@ def _drop_legacy_run() -> None:
         pass
 
 
-def autostart_enabled() -> bool:
+_autostart_cache: bool | None = None
+
+
+def autostart_enabled(refresh: bool = False) -> bool:
+    global _autostart_cache
+    if _autostart_cache is not None and not refresh:
+        return _autostart_cache
     try:
         import subprocess
 
-        res = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME],
-                             capture_output=True, timeout=15)
-        return res.returncode == 0
+        # CREATE_NO_WINDOW: без этого schtasks открывает консольное окно,
+        # оно забирает фокус — и меню виджета схлопывается сразу после
+        # открытия (шестерёнка "не работает")
+        res = subprocess.run(
+            ["schtasks", "/Query", "/TN", TASK_NAME],
+            capture_output=True, timeout=15,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        _autostart_cache = res.returncode == 0
     except Exception:  # noqa: BLE001
-        return False
+        _autostart_cache = False
+    return _autostart_cache
 
 
 def set_autostart(enable: bool) -> bool:
@@ -353,9 +366,9 @@ def set_autostart(enable: bool) -> bool:
     for _ in range(30):
         time.sleep(0.4)
         QApplication.processEvents()
-        if autostart_enabled() == enable:
+        if autostart_enabled(refresh=True) == enable:
             return True
-    return autostart_enabled() == enable
+    return autostart_enabled(refresh=True) == enable
 
 
 # ------------------------------------------------------------- сбор данных --
@@ -473,6 +486,10 @@ class CpuTemp:
             hr = self._lib.pawnio_execute(
                 self._h, b"ioctl_read_smn", inp, 1, out, 1, ctypes.byref(got))
             if hr != 0 or not got.value:
+                # драйвер мог быть занят другим процессом — закрываем и
+                # попробуем заново при следующем чтении
+                self.close()
+                self.reason = "драйвер PawnIO не ответил"
                 return None
             raw = out[0]
             # биты 21..31 — температура в шагах 0.125 °C (так же считает
@@ -902,6 +919,8 @@ class Overlay(QWidget):
         self._pos = ui["pos"]
         self.notify = ui["notify"]
         self._alerted: dict[str, int] = {}
+        self._menu = None
+        autostart_enabled()  # прогреваем кэш: меню не должно ничего запускать
         self._save()
         self.collector = Collector()
         self._drag: QPoint | None = None
@@ -1147,7 +1166,8 @@ class Overlay(QWidget):
     def show_menu_at_gear(self) -> None:
         menu = self.build_menu()
         pos = self.gear.mapToGlobal(QPoint(0, self.gear.height() + 4))
-        menu.exec(pos)
+        self._menu = menu  # держим ссылку: иначе Qt удалит меню сразу
+        menu.popup(pos)
 
     def show_about(self) -> None:
         dlg = AboutDialog(self.lang, self)
@@ -1536,8 +1556,43 @@ class Overlay(QWidget):
         p.drawPath(path)
 
 
+def diag() -> None:
+    """Диагностика для сборки: пишет причину недоступности температуры в файл."""
+    import ctypes
+
+    try:
+        admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:  # noqa: BLE001
+        admin = False
+    c = Collector()
+    data = c.read()
+    lines = [
+        f"version={APP_VERSION}",
+        f"frozen={getattr(sys, 'frozen', False)}",
+        f"here={HERE}",
+        f"admin={admin}",
+        f"cpu={c.cpu_name}",
+        f"gpu={c.gpu_name}",
+        f"temp_reason={c.temp.reason!r}",
+        f"temp_available={c.temp.available}",
+        f"cpu_temp={data.get('cpu_temp')}",
+        f"gpu_temp={data.get('gpu_temp')}",
+        f"module_file={os.path.exists(os.path.join(HERE, _MODULE_NAME))}",
+        f"pawnio_dll={CpuTemp._dll_path()}",
+    ]
+    try:
+        with open(os.path.join(HERE, "_diag.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except OSError as exc:
+        print("[diag] не записалось:", exc)
+    c.close()
+
+
 def main() -> None:
     app = QApplication(sys.argv)
+    if "--diag" in sys.argv:
+        diag()
+        return
     app.setApplicationName("System Monitor")
     app.setFont(QFont("Segoe UI", 9))
     widget = Overlay()
