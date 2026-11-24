@@ -60,7 +60,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "HermesSystemMonitor"
 
 APP_NAME = "System Monitor"
-APP_VERSION = "1.03"
+APP_VERSION = "1.04"
 APP_IDEA = "Evgeniy_RED"
 APP_IMPL = "DeepSeek V4.1-Flash 1017"
 
@@ -102,12 +102,13 @@ TEXTS = {
         "tip_lang": "Язык / Language",
         "tip_freeram": "Освободить память (сжать рабочие наборы процессов)",
         "msg_freed": "Освобождено", "msg_nothing": "Освобождать нечего",
+        "msg_autostart_no": "Автозапуск не изменён: нужны права администратора",
 
         "about_idea": "Concept by", "about_dev": "Developed by",
 
         "a_gpu_temp": "Температура GPU", "a_cpu_temp": "Температура CPU",
         "lvl_warn": "высокая", "lvl_crit": "критическая",
-        "tip_cputemp": "температура — из HWiNFO (должен быть запущен)",
+        "tip_cputemp": "нужен запуск от администратора (драйвер PawnIO)",
 
         "u_gb": "ГБ", "u_watt": "Вт", "u_mhz": "МГц",
         "u_mbits": "Мбит/с", "u_mbs": "МБ/с",
@@ -149,12 +150,13 @@ TEXTS = {
         "tip_lang": "Language / Язык",
         "tip_freeram": "Free memory (trim process working sets)",
         "msg_freed": "Freed", "msg_nothing": "Nothing to free",
+        "msg_autostart_no": "Autostart unchanged: administrator rights required",
 
         "about_idea": "Concept by", "about_dev": "Developed by",
 
         "a_gpu_temp": "GPU temperature", "a_cpu_temp": "CPU temperature",
         "lvl_warn": "high", "lvl_crit": "critical",
-        "tip_cputemp": "CPU temperature comes from HWiNFO (must be running)",
+        "tip_cputemp": "requires running as administrator (PawnIO driver)",
 
         "u_gb": "GB", "u_watt": "W", "u_mhz": "MHz",
         "u_mbits": "Mbit/s", "u_mbs": "MB/s",
@@ -275,143 +277,224 @@ def log_event(label: str, value: str, limit: str) -> None:
 
 
 # ------------------------------------------------------------- автозагрузка --
-def autostart_enabled() -> bool:
-    if winreg is None:
-        return False
+# Температура процессора читается через драйвер PawnIO, а он пускает только
+# процессы с правами администратора. Поэтому автозапуск делаем не через
+# ключ Run в реестре, а через планировщик задач с уровнем "Highest":
+# тогда виджет стартует при входе уже с нужными правами и без запроса UAC.
+TASK_NAME = "HermesSystemMonitor"
+
+
+def _launch_target() -> tuple[str, str]:
+    """Файл и аргументы для автозапуска."""
+    if getattr(sys, "frozen", False):
+        return sys.executable, ""
+    exe = sys.executable
+    cand = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    if os.path.exists(cand):
+        exe = cand
+    return exe, os.path.abspath(__file__)
+
+
+def _runas(ps: str) -> None:
+    """Выполнить команду PowerShell с повышением прав (один запрос UAC)."""
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-            winreg.QueryValueEx(key, RUN_NAME)
-            return True
+        import ctypes
+
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", "powershell.exe",
+            f'-NoProfile -WindowStyle Hidden -Command "{ps}"', None, 1)
+    except Exception as exc:  # noqa: BLE001
+        print("[autostart] не удалось запросить права:", exc)
+
+
+def _drop_legacy_run() -> None:
+    """Убрать старую запись из HKCU\\...\\Run, если она осталась."""
+    if winreg is None:
+        return
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, RUN_NAME)
     except OSError:
+        pass
+
+
+def autostart_enabled() -> bool:
+    try:
+        import subprocess
+
+        res = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME],
+                             capture_output=True, timeout=15)
+        return res.returncode == 0
+    except Exception:  # noqa: BLE001
         return False
 
 
 def set_autostart(enable: bool) -> bool:
-    if winreg is None:
-        return False
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
-                            winreg.KEY_SET_VALUE) as key:
-            if enable:
-                if getattr(sys, "frozen", False):
-                    command = f'"{sys.executable}"'
-                else:
-                    exe = sys.executable
-                    if os.path.basename(exe).lower() != "pythonw.exe":
-                        cand = os.path.join(os.path.dirname(exe), "pythonw.exe")
-                        if os.path.exists(cand):
-                            exe = cand
-                    command = f'"{exe}" "{os.path.abspath(__file__)}"'
-                winreg.SetValueEx(key, RUN_NAME, 0, winreg.REG_SZ, command)
-            else:
-                try:
-                    winreg.DeleteValue(key, RUN_NAME)
-                except FileNotFoundError:
-                    pass
-        return True
-    except OSError as exc:
-        print("[autostart] ошибка:", exc)
-        return False
+    """Создать или удалить задачу автозапуска с правами администратора."""
+    _drop_legacy_run()
+    if enable:
+        exe, script = _launch_target()
+        arg = f" -Argument '{script}'" if script else ""
+        ps = (
+            f"$a=New-ScheduledTaskAction -Execute '{exe}'{arg}; "
+            "$p=New-ScheduledTaskPrincipal -UserId $env:USERNAME "
+            "-RunLevel Highest -LogonType Interactive; "
+            "$t=New-ScheduledTaskTrigger -AtLogOn; "
+            f"Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $a "
+            "-Principal $p -Trigger $t -Force | Out-Null"
+        )
+    else:
+        ps = (f"Unregister-ScheduledTask -TaskName '{TASK_NAME}' "
+              "-Confirm:$false")
+    _runas(ps)
+
+    # задача создаётся отдельным процессом — ждём, пока отработает
+    for _ in range(30):
+        time.sleep(0.4)
+        QApplication.processEvents()
+        if autostart_enabled() == enable:
+            return True
+    return autostart_enabled() == enable
 
 
 # ------------------------------------------------------------- сбор данных --
-# ----------------------------------------------- датчики HWiNFO (SM) -------
-_SM_SIG = 0x53695748  # 'HWiS'
+# ------------------------------------ температура процессора (PawnIO) ------
+_SMN_CUR_TMP = 0x00059800        # THM_TCON_CUR_TMP у Zen/Zen2
+_MODULE_NAME = "AMDFamily17.bin"
 
 
-class HWiNFO:
-    """Температура процессора из общей памяти HWiNFO.
+class CpuTemp:
+    """Температура процессора AMD: чтение регистров SMN через PawnIO.
 
-    HWiNFO умеет отдавать датчики без драйверов и без прав администратора,
-    но только пока он сам запущен (настройка SensorsSM=1 в его INI).
+    Windows не даёт обычной программе доступа к этим регистрам: нужен
+    драйвер. PawnIO (https://pawnio.eu, GPL-2.0) — подписанный драйвер,
+    которому можно подсунуть свой модуль без подписи. Модуль
+    AMDFamily17.bin (LGPL-2.1) выполняет чтение внутри драйвера.
+
+    Требуется запуск от администратора: обычным процессам драйвер
+    отвечает 0x80070005 (доступ запрещён).
     """
 
-    FILE_MAP_READ = 0x0004
-
     def __init__(self) -> None:
+        self._lib = None
         self._h = None
-        self._addr = None
-        self._k32 = None
+        self._ok = False
         self._ctypes = None
+        self.reason = "не инициализировано"
+
+    @property
+    def available(self) -> bool:
+        return self._ok
+
+    @staticmethod
+    def _dll_path() -> str | None:
+        for path in (
+            os.path.join(HERE, "PawnIOLib.dll"),
+            r"C:\Program Files\PawnIO\PawnIOLib.dll",
+        ):
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _init(self) -> None:
         try:
             import ctypes
-            import ctypes.wintypes as wt
-
-            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            k32.OpenFileMappingW.restype = wt.HANDLE
-            k32.OpenFileMappingW.argtypes = [wt.DWORD, wt.BOOL, wt.LPCWSTR]
-            k32.MapViewOfFile.restype = ctypes.c_void_p
-            k32.MapViewOfFile.argtypes = [wt.HANDLE, wt.DWORD, wt.DWORD,
-                                          wt.DWORD, ctypes.c_size_t]
-            k32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
-            k32.CloseHandle.argtypes = [wt.HANDLE]
-            self._k32, self._ctypes = k32, ctypes
+            from ctypes import wintypes
         except Exception as exc:  # noqa: BLE001
-            print("[HWiNFO] вызовы WinAPI недоступны:", exc)
+            self.reason = f"ctypes недоступен: {exc}"
+            return
 
-    def _open(self) -> bool:
-        if self._addr is not None:
-            return True
-        if self._k32 is None:
-            return False
-        h = self._k32.OpenFileMappingW(self.FILE_MAP_READ, False,
-                                       "Global\\HWiNFO_SENS_SM2")
-        if not h:
-            return False
-        addr = self._k32.MapViewOfFile(h, self.FILE_MAP_READ, 0, 0, 0)
-        if not addr:
-            self._k32.CloseHandle(h)
-            return False
-        self._h, self._addr = h, addr
-        return True
+        dll = self._dll_path()
+        if dll is None:
+            self.reason = "драйвер PawnIO не установлен"
+            return
+        mod = os.path.join(HERE, _MODULE_NAME)
+        if not os.path.exists(mod):
+            self.reason = f"нет файла {_MODULE_NAME}"
+            return
+
+        try:
+            lib = ctypes.WinDLL(dll)
+            lib.pawnio_open.argtypes = [ctypes.POINTER(wintypes.HANDLE)]
+            lib.pawnio_open.restype = ctypes.c_long
+            lib.pawnio_load.argtypes = [wintypes.HANDLE,
+                                        ctypes.POINTER(ctypes.c_ubyte),
+                                        ctypes.c_size_t]
+            lib.pawnio_load.restype = ctypes.c_long
+            lib.pawnio_execute.argtypes = [
+                wintypes.HANDLE, ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_ulonglong), ctypes.c_size_t,
+                ctypes.POINTER(ctypes.c_ulonglong), ctypes.c_size_t,
+                ctypes.POINTER(ctypes.c_size_t),
+            ]
+            lib.pawnio_execute.restype = ctypes.c_long
+            lib.pawnio_close.argtypes = [wintypes.HANDLE]
+        except OSError as exc:
+            self.reason = f"PawnIOLib не загрузилась: {exc}"
+            return
+
+        handle = wintypes.HANDLE()
+        hr = lib.pawnio_open(ctypes.byref(handle))
+        if hr != 0:
+            code = hr & 0xFFFFFFFF
+            self.reason = ("нужен запуск от администратора"
+                           if code == 0x80070005 else f"ошибка открытия 0x{code:08X}")
+            return
+
+        try:
+            blob = open(mod, "rb").read()
+        except OSError as exc:
+            lib.pawnio_close(handle)
+            self.reason = f"модуль не прочитан: {exc}"
+            return
+
+        buf = (ctypes.c_ubyte * len(blob)).from_buffer_copy(blob)
+        hr = lib.pawnio_load(handle, buf, len(blob))
+        if hr != 0:
+            lib.pawnio_close(handle)
+            self.reason = f"модуль не загрузился 0x{hr & 0xFFFFFFFF:08X}"
+            return
+
+        self._lib, self._h, self._ctypes = lib, handle, ctypes
+        self._ok = True
+        self.reason = ""
+
+    def read(self) -> float | None:
+        if not self._ok:
+            self._init()
+            if not self._ok:
+                return None
+        try:
+            ctypes = self._ctypes
+            inp = (ctypes.c_ulonglong * 1)(_SMN_CUR_TMP)
+            out = (ctypes.c_ulonglong * 1)()
+            got = ctypes.c_size_t()
+            hr = self._lib.pawnio_execute(
+                self._h, b"ioctl_read_smn", inp, 1, out, 1, ctypes.byref(got))
+            if hr != 0 or not got.value:
+                return None
+            raw = out[0]
+            # биты 21..31 — температура в шагах 0.125 °C (так же считает
+            # драйвер k10temp в Linux и сама HWiNFO)
+            temp = ((raw >> 21) & 0x7FF) * 0.125
+            if not (-20.0 < temp < 150.0):
+                return None
+            return round(temp, 1)
+        except Exception as exc:  # noqa: BLE001
+            print("[temp] ошибка чтения:", exc)
+            self._ok = False
+            self.reason = f"ошибка чтения: {exc}"
+            return None
 
     def close(self) -> None:
-        if self._k32 is not None:
-            if self._addr is not None:
-                self._k32.UnmapViewOfFile(self._addr)
-            if self._h is not None:
-                self._k32.CloseHandle(self._h)
-        self._addr = self._h = None
-
-    def cpu_temp(self) -> float | None:
-        if not self._open():
-            return None
-        try:
-            import struct
-
-            ctypes = self._ctypes
-            head = ctypes.string_at(self._addr, 44)
-            (sig, _ver, _rev, _poll, _o_s, _z_s, _n_s,
-             o_r, z_r, n_r) = struct.unpack_from("<IIIqIIIIII", head)
-            if sig != _SM_SIG or not n_r or not z_r:
-                return None
-            raw = ctypes.string_at(self._addr, o_r + z_r * n_r)
-            best: tuple[int, float] | None = None
-            for i in range(n_r):
-                base = o_r + i * z_r
-                _rid, _sid, rtype = struct.unpack_from("<III", raw, base)
-                if rtype >> 24 != 1:  # старший байт — тип датчика, 1 = температура
-                    continue
-                lab = raw[base + 12:base + 140].split(b"\0")[0]
-                text = lab.decode("utf-8", "replace").lower()
-                val = struct.unpack_from("<d", raw, base + 284)[0]
-                if not (-50.0 < val < 200.0):   # мусор в датчике — пропускаем
-                    continue
-                if "tctl" in text or "tdie" in text:
-                    weight = 3          # у AMD это и есть температура ядра
-                elif "package" in text:
-                    weight = 2
-                elif "core max" in text:
-                    weight = 1
-                else:
-                    weight = 0
-                if best is None or weight > best[0]:
-                    best = (weight, val)
-            return round(best[1], 1) if best else None
-        except Exception as exc:  # noqa: BLE001
-            print("[HWiNFO] чтение не удалось:", exc)
-            self.close()
-            return None
+        if self._lib is not None and self._h is not None:
+            try:
+                self._lib.pawnio_close(self._h)
+            except Exception:  # noqa: BLE001
+                pass
+        self._h = None
+        self._ok = False
 
 
 def cpu_name() -> str:
@@ -451,7 +534,7 @@ class Collector:
         self._net_prev = None
         self._disk_prev = None
         self.net_total = [0.0, 0.0]
-        self.hwinfo = HWiNFO()
+        self.temp = CpuTemp()
         self.cpu_name = cpu_name()
         psutil.cpu_percent(interval=None)
 
@@ -469,7 +552,7 @@ class Collector:
         if freq:
             d["cpu_freq"] = freq.current
 
-        temp = self.hwinfo.cpu_temp() if self.hwinfo is not None else None
+        temp = self.temp.read() if self.temp is not None else None
         if temp is not None:
             d["cpu_temp"] = temp
 
@@ -535,8 +618,8 @@ class Collector:
         return d
 
     def close(self) -> None:
-        if self.hwinfo is not None:
-            self.hwinfo.close()
+        if self.temp is not None:
+            self.temp.close()
         if self.nv is not None:
             try:
                 self.nv.nvmlShutdown()
@@ -1104,8 +1187,12 @@ class Overlay(QWidget):
         self.refresh()
 
     def toggle_autostart(self, checked: bool) -> None:
-        if not set_autostart(checked):
-            print("[autostart] не удалось изменить")
+        if set_autostart(checked):
+            return
+        if self._tray is not None:
+            self._tray.showMessage(
+                APP_NAME, self._t("msg_autostart_no"),
+                QSystemTrayIcon.MessageIcon.Warning, 6000)
 
     def toggle_notify(self, checked: bool) -> None:
         self.notify = checked
@@ -1337,7 +1424,11 @@ class Overlay(QWidget):
                 f"{t:.1f} °C" if num else self._t("v_nodata"),
                 pct=float(t) if num else None, alert=alert,
             )
-            f["cpu_temp"].value.setToolTip("" if num else self._t("tip_cputemp"))
+            if num:
+                f["cpu_temp"].value.setToolTip("")
+            else:
+                reason = getattr(self.collector.temp, "reason", "")
+                f["cpu_temp"].value.setToolTip(reason or self._t("tip_cputemp"))
         if s["cpu_freq"] and "cpu_freq" in d:
             f["cpu_freq"].set(f"{d['cpu_freq']:.0f} {mhz}")
 
