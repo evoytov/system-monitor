@@ -60,7 +60,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "HermesSystemMonitor"
 
 APP_NAME = "System Monitor"
-APP_VERSION = "1.02"
+APP_VERSION = "1.03"
 APP_IDEA = "Evgeniy_RED"
 APP_IMPL = "DeepSeek V4.1-Flash 1017"
 
@@ -73,7 +73,8 @@ TEXTS = {
         "f_gpu_load": "Загрузка GPU", "f_vram": "Видеопамять",
         "f_gpu_temp": "Температура GPU", "f_gpu_power": "Питание GPU",
         "f_gpu_clock": "Частота ядра", "f_gpu_fan": "Кулер GPU",
-        "f_cpu_load": "Загрузка CPU", "f_cpu_freq": "Частота CPU",
+        "f_cpu_load": "Загрузка CPU", "f_cpu_temp": "Температура CPU",
+        "f_cpu_freq": "Частота CPU",
         "f_ram": "Оперативная память", "f_ram_free": "Свободно ОЗУ",
         "f_disk": "Диск C:", "f_disk_io": "Скорость диска",
         "f_net_speed": "Скорость сети", "f_net_total": "Трафик за сессию",
@@ -82,7 +83,8 @@ TEXTS = {
         "t_gpu_load": "ЗАГРУЗКА GPU", "t_vram": "ВИДЕОПАМЯТЬ",
         "t_gpu_temp": "ТЕМПЕРАТУРА GPU", "t_gpu_power": "ПИТАНИЕ GPU",
         "t_gpu_clock": "ЧАСТОТА ЯДРА", "t_gpu_fan": "КУЛЕР GPU",
-        "t_cpu_load": "ПРОЦЕССОР", "t_cpu_freq": "ЧАСТОТА CPU",
+        "t_cpu_load": "ПРОЦЕССОР", "t_cpu_temp": "ТЕМПЕРАТУРА CPU",
+        "t_cpu_freq": "ЧАСТОТА CPU",
         "t_ram": "ОПЕРАТИВНАЯ ПАМЯТЬ", "t_ram_free": "СВОБОДНО ОЗУ",
         "t_disk": "ДИСК C:", "t_disk_io": "ДИСК: ЧТЕНИЕ / ЗАПИСЬ",
         "t_net_speed": "СЕТЬ: ↓ / ↑", "t_net_total": "ТРАФИК ЗА СЕССИЮ",
@@ -103,6 +105,10 @@ TEXTS = {
 
         "about_idea": "Concept by", "about_dev": "Developed by",
 
+        "a_gpu_temp": "Температура GPU", "a_cpu_temp": "Температура CPU",
+        "lvl_warn": "высокая", "lvl_crit": "критическая",
+        "tip_cputemp": "температура — из HWiNFO (должен быть запущен)",
+
         "u_gb": "ГБ", "u_watt": "Вт", "u_mhz": "МГц",
         "u_mbits": "Мбит/с", "u_mbs": "МБ/с",
         "v_nodata": "нет данных",
@@ -114,7 +120,8 @@ TEXTS = {
         "f_gpu_load": "GPU load", "f_vram": "Video memory",
         "f_gpu_temp": "GPU temperature", "f_gpu_power": "GPU power",
         "f_gpu_clock": "Core clock", "f_gpu_fan": "GPU fan",
-        "f_cpu_load": "CPU load", "f_cpu_freq": "CPU clock",
+        "f_cpu_load": "CPU load", "f_cpu_temp": "CPU temperature",
+        "f_cpu_freq": "CPU clock",
         "f_ram": "RAM", "f_ram_free": "Free RAM",
         "f_disk": "Disk C:", "f_disk_io": "Disk activity",
         "f_net_speed": "Network speed", "f_net_total": "Session traffic",
@@ -123,7 +130,8 @@ TEXTS = {
         "t_gpu_load": "GPU LOAD", "t_vram": "VRAM",
         "t_gpu_temp": "GPU TEMP", "t_gpu_power": "GPU POWER",
         "t_gpu_clock": "CORE CLOCK", "t_gpu_fan": "GPU FAN",
-        "t_cpu_load": "CPU", "t_cpu_freq": "CPU CLOCK",
+        "t_cpu_load": "CPU", "t_cpu_temp": "CPU TEMP",
+        "t_cpu_freq": "CPU CLOCK",
         "t_ram": "MEMORY", "t_ram_free": "FREE RAM",
         "t_disk": "DISK C:", "t_disk_io": "DISK READ / WRITE",
         "t_net_speed": "NET ↓ / ↑", "t_net_total": "SESSION TRAFFIC",
@@ -144,6 +152,10 @@ TEXTS = {
 
         "about_idea": "Concept by", "about_dev": "Developed by",
 
+        "a_gpu_temp": "GPU temperature", "a_cpu_temp": "CPU temperature",
+        "lvl_warn": "high", "lvl_crit": "critical",
+        "tip_cputemp": "CPU temperature comes from HWiNFO (must be running)",
+
         "u_gb": "GB", "u_watt": "W", "u_mhz": "MHz",
         "u_mbits": "Mbit/s", "u_mbs": "MB/s",
         "v_nodata": "no data",
@@ -160,15 +172,10 @@ def tr(lang: str, key: str) -> str:
 MIN_W, MAX_W, DEFAULT_W = 260, 440, 300
 EDGE = 6  # зона захвата у края, px
 
-# пороги для журнала и уведомлений: (предел в %, подпись для журнала)
-ALERT_LIMITS = {
-    "gpu_load": (85.0, "GPU load"),
-    "cpu_load": (85.0, "CPU load"),
-    "ram":      (90.0, "RAM"),
-    "gpu_temp": (82.0, "GPU temp"),
-    "disk":     (90.0, "Disk C:"),
-}
-HYST = 5.0  # гистерезис: назад в норму только ниже порога на столько
+# В журнал и уведомления пишем ТОЛЬКО температуры. Нагрузка 100 % — это
+# нормальная работа рендера на часы, лог от неё превращается в мусор.
+# Перегрев — событие редкое и важное. Два уровня: высокая и критическая.
+HYST_TEMP = 3.0  # возврат в норму только ниже порога на столько градусов
 
 # ---------------------------------------------------------------- палитра ---
 BG      = QColor(18, 18, 22, 208)
@@ -196,6 +203,7 @@ DEFAULTS = {
     "gpu_clock": False,
     "gpu_fan":   False,
     "cpu_load":  True,
+    "cpu_temp":  True,
     "cpu_freq":  False,
     "ram":       True,
     "ram_free":  False,
@@ -208,7 +216,7 @@ DEFAULTS = {
 
 SECTIONS = [
     ("gpu",  ["gpu_load", "vram", "gpu_temp", "gpu_power", "gpu_clock", "gpu_fan"]),
-    ("cpu",  ["cpu_load", "cpu_freq"]),
+    ("cpu",  ["cpu_load", "cpu_temp", "cpu_freq"]),
     ("mem",  ["ram", "ram_free"]),
     ("disk", ["disk", "disk_io"]),
     ("net",  ["net_speed", "net_total"]),
@@ -307,6 +315,119 @@ def set_autostart(enable: bool) -> bool:
 
 
 # ------------------------------------------------------------- сбор данных --
+# ----------------------------------------------- датчики HWiNFO (SM) -------
+_SM_SIG = 0x53695748  # 'HWiS'
+
+
+class HWiNFO:
+    """Температура процессора из общей памяти HWiNFO.
+
+    HWiNFO умеет отдавать датчики без драйверов и без прав администратора,
+    но только пока он сам запущен (настройка SensorsSM=1 в его INI).
+    """
+
+    FILE_MAP_READ = 0x0004
+
+    def __init__(self) -> None:
+        self._h = None
+        self._addr = None
+        self._k32 = None
+        self._ctypes = None
+        try:
+            import ctypes
+            import ctypes.wintypes as wt
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.OpenFileMappingW.restype = wt.HANDLE
+            k32.OpenFileMappingW.argtypes = [wt.DWORD, wt.BOOL, wt.LPCWSTR]
+            k32.MapViewOfFile.restype = ctypes.c_void_p
+            k32.MapViewOfFile.argtypes = [wt.HANDLE, wt.DWORD, wt.DWORD,
+                                          wt.DWORD, ctypes.c_size_t]
+            k32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+            k32.CloseHandle.argtypes = [wt.HANDLE]
+            self._k32, self._ctypes = k32, ctypes
+        except Exception as exc:  # noqa: BLE001
+            print("[HWiNFO] вызовы WinAPI недоступны:", exc)
+
+    def _open(self) -> bool:
+        if self._addr is not None:
+            return True
+        if self._k32 is None:
+            return False
+        h = self._k32.OpenFileMappingW(self.FILE_MAP_READ, False,
+                                       "Global\\HWiNFO_SENS_SM2")
+        if not h:
+            return False
+        addr = self._k32.MapViewOfFile(h, self.FILE_MAP_READ, 0, 0, 0)
+        if not addr:
+            self._k32.CloseHandle(h)
+            return False
+        self._h, self._addr = h, addr
+        return True
+
+    def close(self) -> None:
+        if self._k32 is not None:
+            if self._addr is not None:
+                self._k32.UnmapViewOfFile(self._addr)
+            if self._h is not None:
+                self._k32.CloseHandle(self._h)
+        self._addr = self._h = None
+
+    def cpu_temp(self) -> float | None:
+        if not self._open():
+            return None
+        try:
+            import struct
+
+            ctypes = self._ctypes
+            head = ctypes.string_at(self._addr, 44)
+            (sig, _ver, _rev, _poll, _o_s, _z_s, _n_s,
+             o_r, z_r, n_r) = struct.unpack_from("<IIIqIIIIII", head)
+            if sig != _SM_SIG or not n_r or not z_r:
+                return None
+            raw = ctypes.string_at(self._addr, o_r + z_r * n_r)
+            best: tuple[int, float] | None = None
+            for i in range(n_r):
+                base = o_r + i * z_r
+                _rid, _sid, rtype = struct.unpack_from("<III", raw, base)
+                if rtype >> 24 != 1:  # старший байт — тип датчика, 1 = температура
+                    continue
+                lab = raw[base + 12:base + 140].split(b"\0")[0]
+                text = lab.decode("utf-8", "replace").lower()
+                val = struct.unpack_from("<d", raw, base + 284)[0]
+                if not (-50.0 < val < 200.0):   # мусор в датчике — пропускаем
+                    continue
+                if "tctl" in text or "tdie" in text:
+                    weight = 3          # у AMD это и есть температура ядра
+                elif "package" in text:
+                    weight = 2
+                elif "core max" in text:
+                    weight = 1
+                else:
+                    weight = 0
+                if best is None or weight > best[0]:
+                    best = (weight, val)
+            return round(best[1], 1) if best else None
+        except Exception as exc:  # noqa: BLE001
+            print("[HWiNFO] чтение не удалось:", exc)
+            self.close()
+            return None
+
+
+def cpu_name() -> str:
+    """Имя процессора из реестра: «AMD Ryzen 5 3600 6-Core Processor»."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+        ) as key:
+            return str(winreg.QueryValueEx(key, "ProcessorNameString")[0]).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 class Collector:
     def __init__(self) -> None:
         self.nv = None
@@ -330,6 +451,8 @@ class Collector:
         self._net_prev = None
         self._disk_prev = None
         self.net_total = [0.0, 0.0]
+        self.hwinfo = HWiNFO()
+        self.cpu_name = cpu_name()
         psutil.cpu_percent(interval=None)
 
     def read(self) -> dict:
@@ -345,6 +468,10 @@ class Collector:
         freq = psutil.cpu_freq()
         if freq:
             d["cpu_freq"] = freq.current
+
+        temp = self.hwinfo.cpu_temp() if self.hwinfo is not None else None
+        if temp is not None:
+            d["cpu_temp"] = temp
 
         du = psutil.disk_usage("C:\\")
         d["disk_used"] = du.used / 1024**3
@@ -408,6 +535,8 @@ class Collector:
         return d
 
     def close(self) -> None:
+        if self.hwinfo is not None:
+            self.hwinfo.close()
         if self.nv is not None:
             try:
                 self.nv.nvmlShutdown()
@@ -689,7 +818,7 @@ class Overlay(QWidget):
         self._width = ui["width"]
         self._pos = ui["pos"]
         self.notify = ui["notify"]
-        self._alerted: dict[str, bool] = {}
+        self._alerted: dict[str, int] = {}
         self._save()
         self.collector = Collector()
         self._drag: QPoint | None = None
@@ -771,7 +900,8 @@ class Overlay(QWidget):
             "gpu_load": (GRAD_GPU, True), "vram": (GRAD_VRAM, True),
             "gpu_temp": (GRAD_TEMP, True), "gpu_power": (GRAD_PWR, True),
             "gpu_clock": (None, False), "gpu_fan": (GRAD_FAN, True),
-            "cpu_load": (GRAD_CPU, True), "cpu_freq": (None, False),
+            "cpu_load": (GRAD_CPU, True), "cpu_temp": (GRAD_TEMP, True),
+            "cpu_freq": (None, False),
             "ram": (GRAD_RAM, True), "ram_free": (None, False),
             "disk": (GRAD_DISK, True), "disk_io": (None, False),
             "net_speed": (GRAD_NET, False), "net_total": (None, False),
@@ -796,6 +926,9 @@ class Overlay(QWidget):
                 extra: dict = {}
                 if k == "gpu_temp":
                     w, c = self._temp_limits()
+                    extra = {"warn": w, "crit": c}
+                elif k == "cpu_temp":
+                    w, c = self._cpu_temp_limits()
                     extra = {"warn": w, "crit": c}
                 elif k == "ram":
                     extra = {"action": self.free_ram,
@@ -988,40 +1121,54 @@ class Overlay(QWidget):
 
     # --- события по порогам ---------------------------------------------
     def _check_alerts(self, d: dict) -> None:
-        values = {
-            "gpu_load": (d.get("gpu_load"), "%"),
-            "cpu_load": (d.get("cpu"), "%"),
-            "ram": (d.get("ram_pct"), "%"),
-            "gpu_temp": (d.get("gpu_temp"), " °C"),
-            "disk": (d.get("disk_pct"), "%"),
-        }
-        for key, (limit, label) in ALERT_LIMITS.items():
-            value = values.get(key, (None, ""))[0]
+        """Журнал и трей: только температуры, только пересечение порога."""
+        pairs = (
+            ("gpu_temp", d.get("gpu_temp"), *self._temp_limits(), "a_gpu_temp"),
+            ("cpu_temp", d.get("cpu_temp"), *self._cpu_temp_limits(), "a_cpu_temp"),
+        )
+        for key, value, warn, crit, label_key in pairs:
             if value is None:
+                self._alerted[key] = 0
                 continue
-            unit = values[key][1]
-            fired = self._alerted.get(key, False)
-            if not fired and value >= limit:
-                self._alerted[key] = True
-                shown = f"{value:.0f}{unit}"
-                limit_s = f"{limit:.0f}{unit}"
-                log_event(label, shown, limit_s)
+            stage = 2 if value >= crit else (1 if value >= warn else 0)
+            old = self._alerted.get(key, 0)
+            if stage > old:
+                self._alerted[key] = stage
+                limit = crit if stage == 2 else warn
+                level = self._t("lvl_crit" if stage == 2 else "lvl_warn")
+                shown = f"{value:.0f} °C"
+                log_event(f"{self._t(label_key)} — {level}", shown,
+                          f"{limit:.0f} °C")
                 if self.notify and self._tray is not None:
                     self._tray.showMessage(
-                        f"{APP_NAME}: {label}",
-                        f"{shown} — " + ("порог" if self.lang == "ru" else "limit")
-                        + f" {limit_s}",
-                        QSystemTrayIcon.MessageIcon.Warning,
+                        f"{APP_NAME}: {self._t(label_key)}",
+                        f"{shown} — {level} ({limit:.0f} °C)",
+                        QSystemTrayIcon.MessageIcon.Critical if stage == 2
+                        else QSystemTrayIcon.MessageIcon.Warning,
                         5000,
                     )
-            elif fired and value < limit - HYST:
-                self._alerted[key] = False
+            elif stage < old:
+                back = (crit if old == 2 else warn) - HYST_TEMP
+                if value < back:
+                    self._alerted[key] = stage
 
     def _temp_limits(self) -> tuple[float, float]:
         """Пороги температуры GPU: для RTX 3060 свои, для прочих общие."""
         if "3060" in self.collector.gpu_name.lower():
             return 54.0, 58.0
         return 72.0, 82.0
+
+    def _cpu_temp_limits(self) -> tuple[float, float]:
+        """Пороги температуры CPU.
+
+        У Ryzen 5 3600 (Zen 2) предел по паспорту AMD — 95 °C, поэтому
+        «высокая» ставится на 80, а «критическая» на 90: остаётся запас
+        до троттлинга. У Intel пределы выше, там 85/95.
+        """
+        name = self.collector.cpu_name.lower()
+        if "amd" in name or "ryzen" in name:
+            return 80.0, 90.0
+        return 85.0, 95.0
 
     # --- освобождение памяти -------------------------------------------
     def free_ram(self) -> None:
@@ -1180,6 +1327,17 @@ class Overlay(QWidget):
 
         if s["cpu_load"]:
             f["cpu_load"].set(f"{d['cpu']:.0f} %", d["cpu"])
+        if s["cpu_temp"]:
+            t = d.get("cpu_temp")
+            warn, crit = self._cpu_temp_limits()
+            num = isinstance(t, (int, float))
+            alert = ("crit" if num and t >= crit else
+                     "warn" if num and t >= warn else None)
+            f["cpu_temp"].set(
+                f"{t:.1f} °C" if num else self._t("v_nodata"),
+                pct=float(t) if num else None, alert=alert,
+            )
+            f["cpu_temp"].value.setToolTip("" if num else self._t("tip_cputemp"))
         if s["cpu_freq"] and "cpu_freq" in d:
             f["cpu_freq"].set(f"{d['cpu_freq']:.0f} {mhz}")
 
